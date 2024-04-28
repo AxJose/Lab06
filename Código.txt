@@ -1,0 +1,205 @@
+/*
+ * main.c
+ *
+ * Created: 21/04/2024 11:15:02
+ *  Author: adria
+ */ 
+
+#define F_CPU 16000000
+
+#include <avr/io.h>
+#include <util/delay.h>
+#include <avr/interrupt.h>
+#include <stdint.h>
+
+volatile uint8_t adc_value;
+volatile uint8_t bufferTx;
+volatile uint8_t bufferRx;
+volatile uint8_t select;
+volatile uint8_t modo;
+volatile uint8_t ascii_value;
+volatile uint8_t bit6;
+volatile uint8_t bit2;
+
+void initADC(void);
+void initUART9600(void);
+void WriteTextUART(const char * Texto);
+void writeUART(char character);
+void readUART(void);
+void readPOT(void);
+
+int main(void)
+{
+	initADC();
+	initUART9600();
+	sei();
+	
+	DDRB = 0xFF; // Configurar el puerto B como salida
+	PORTB = 0x00; // Inicializar el puerto B en bajo
+	
+	
+	while(1)
+	{
+	adc_value = ADCH;
+	WriteTextUART("\n\r");
+	WriteTextUART("Escriba el numero segun la opcion que desee:");
+	WriteTextUART("\n\r");
+	WriteTextUART("1) Leer Pot");
+	WriteTextUART("\n\r");
+	WriteTextUART("2) Enviar ASCII");
+	select = 0;
+	bufferTx = 0;	
+	while (select == 0){
+		modo = bufferTx;
+		switch (modo)
+		{
+			case 49: //Leer Pot.
+			select = 1;
+			break;
+			
+			case 50: //Enviar ASCII
+			select = 1;
+			break;
+			
+			default: // Si se preciona un valor no válido
+				break;
+		}
+	}
+	switch (modo)
+	{
+		case 49: 
+		readPOT(); //Opción 1
+		break;
+		case 50: 
+		readUART(); // Opción 2
+		break;
+		default: // Ninguna opción
+			break;
+	}	
+		
+	}
+}
+
+void readPOT(void){
+	while (ADCSRA & (1 << ADSC));
+	int unidad, decena, centena;
+	
+	adc_value = ADCH;
+	ADCSRA |= (1<<ADSC);
+	bit6 = adc_value & 0x3F;
+	PORTB = bit6;
+	bit2 = ((adc_value & 0xC0) >> 6);
+	PORTC = bit2;
+	
+	// Valor de ejemplo 135
+	centena = adc_value / 100;	// 1.0
+	decena  = (adc_value - (centena*100)) / 10; // 3.0 
+	unidad  = (adc_value - (centena*100) - (decena*10)); // 5.0
+	WriteTextUART("\n");
+	WriteTextUART("Potenciometro: ");
+	// En la tabla ASCII los valores del 0 al 9 van del 48 al 57
+	writeUART(centena+48);
+	writeUART(decena+48);
+	writeUART(unidad+48);
+	WriteTextUART("\n");
+	writeUART(ADCH);
+	
+	select = 0;
+}
+
+void readUART(void){
+	
+	_delay_ms(100);
+	WriteTextUART("\n\r");
+	WriteTextUART(" Enviar valor: ");
+	bufferTx = 0;
+	
+	while (bufferTx == 0)
+	{
+		ascii_value = bufferTx;
+	}
+	bit6 = ascii_value & 0x3F;
+	PORTB = bit6;
+	bit2 = ((ascii_value & 0xC0) >> 6);
+	PORTC = bit2;
+	select = 0;
+	_delay_ms(100);
+}
+
+void writeUART(char character){
+	while(!(UCSR0A & (1 << UDRE0))); // Esperar a que el buffer de transmisión esté vacío
+	UDR0 = character; // Enviar el caracter
+	PORTB = character;
+}
+
+void WriteTextUART(const char * Texto){
+	uint8_t i;
+	for (i=0; Texto[i] != '\0'; i++){
+		while (!(UCSR0A & (1<<UDRE0)) );
+		UDR0 = Texto[i];
+	}
+}
+
+void initUART9600(void)
+{
+	DDRB = 0xFF;
+	
+	// Paso 1: Rx como entrada y Tx como salida
+	DDRD &= ~(1 << DDD0);
+	DDRD |= (1 << DDD1);
+	
+	//Habilitar PC0 y PC1 como salida (bits 6 y 7)
+	DDRC |= (1 << DDC0) | (1 << DDC1);
+	
+	// Paso 2: Configurar UCSR0A
+	UCSR0A = 0;
+	
+	// Paso 3: Configurar UCSR0B -> Habilitamos ISR de recepción, también rx & tx
+	UCSR0B = 0;
+	UCSR0B |= (1<<RXCIE0) | (1 << RXEN0) | (1 << TXEN0); // Habilitar transmisión y recepción
+	
+	// Paso 4: Configurar UCSR0C -> Asyncrono, Paridad: None, 1 bit Stop, Data bit 8/bits
+	UCSR0C = 0;
+	UCSR0C |= (1 << UCSZ01) | (1 << UCSZ00); // Configurar el tamaño de los datos en 8 bits
+	
+	// Paso 5: Configurar la velocidad de Baudrate: 9600
+	UBRR0 = 103;
+}
+
+void initADC(void){
+	ADMUX = 0;
+	
+	// Referencia AVCC = 5V
+	ADMUX |= (1 << REFS0);
+	ADMUX &= ~(1 << REFS1);
+	
+	// Justificación a la izquierda
+	ADMUX |= (1 << ADLAR);
+	
+	ADCSRA = 0;
+	// Habilitar prescaler de 128, F_ADC = 125kHz
+	ADCSRA |= (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+	
+	// Habilitando el ADC
+	ADCSRA |= (1 << ADEN);
+	
+	// Habilitar canal 2 PINC2 -> ADC2
+	ADMUX |= (1 << MUX1);
+}
+
+ISR(USART_RX_vect){
+	WriteTextUART("\n");
+	writeUART(10);
+	writeUART(13);	
+	bufferTx = UDR0;
+	while(!(UCSR0A & (1<<UDRE0)));
+	UDR0 = bufferTx;
+}
+
+ISR(ADC_vect){
+	adc_value = ADCH;
+	
+	// Apagar la bandera
+	ADCSRA |= (1 << ADIF);
+	
+}
